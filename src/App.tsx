@@ -118,7 +118,7 @@ const normalizeProduct = (raw: Record<string, unknown>): Product => {
 }
 
 const getSupabase = (): SupabaseClient | null => {
-  const url = import.meta.env.VITE_SUPABASE_URL
+  const url = import.meta.env.VITE_SUPABASE_URL?.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '')
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
   if (!url || !anonKey || !url.startsWith('https://')) {
