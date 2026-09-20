@@ -66,75 +66,6 @@ const CATEGORY_ORDER: Array<{ key: CategoryKey; label: string; tone: string }> =
   { key: 'alcohol_cocktails', label: 'Alcohol Cocktails', tone: '#4b1d2d' },
 ]
 
-const FALLBACK_PRODUCTS: Product[] = [
-  {
-    id: 'prod-1',
-    name: 'Madagascar Vanilla Toffee',
-    price: 6500,
-    stock: 18,
-    available: true,
-    category: 'candies',
-    image_url: 'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=900&q=80',
-    flavors: ['Original', 'Caramel', 'Coconut'],
-    description: 'Creamy caramel bite with Madagascar vanilla warmth.',
-  },
-  {
-    id: 'prod-2',
-    name: 'Cocoa Crunch Mix',
-    price: 9500,
-    stock: 12,
-    available: true,
-    category: 'snacks',
-    image_url: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=900&q=80',
-    flavors: ['Dark Cocoa', 'Hazelnut', 'Sea Salt'],
-    description: 'Crisp imported crunch with a refined cocoa finish.',
-  },
-  {
-    id: 'prod-3',
-    name: 'Mango-Lime Spark',
-    price: 7000,
-    stock: 15,
-    available: true,
-    category: 'fresh_drinks',
-    image_url: 'https://images.unsplash.com/photo-1546173159-315724a31696?auto=format&fit=crop&w=900&q=80',
-    flavors: ['Mango', 'Lime', 'Passion'],
-    description: 'Fresh pressed fruit with a bright, tropical finish.',
-  },
-  {
-    id: 'prod-4',
-    name: 'Thunder Rush',
-    price: 10900,
-    stock: 9,
-    available: true,
-    category: 'energy_drinks',
-    image_url: 'https://images.unsplash.com/photo-1525351484163-7529414344d8?auto=format&fit=crop&w=900&q=80',
-    flavors: ['Citrus', 'Berry', 'Zero Sugar'],
-    description: 'High-energy blend with subtle citrus snap.',
-  },
-  {
-    id: 'prod-5',
-    name: 'Protein Trail Bites',
-    price: 12000,
-    stock: 14,
-    available: true,
-    category: 'protein_snacks',
-    image_url: 'https://images.unsplash.com/photo-1514996937319-344454492b37?auto=format&fit=crop&w=900&q=80',
-    flavors: ['Peanut', 'Coconut', 'Berry'],
-    description: 'Protein-rich bites for polished energy without the sugar crash.',
-  },
-  {
-    id: 'prod-6',
-    name: 'Antananarivo Sunset',
-    price: 18000,
-    stock: 7,
-    available: true,
-    category: 'alcohol_cocktails',
-    image_url: 'https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?auto=format&fit=crop&w=900&q=80',
-    flavors: ['Citrus', 'Berry', 'Tropical'],
-    description: 'A premium cocktail-inspired blend with imported character.',
-  },
-]
-
 const DEFAULT_CUSTOMER_FORM: CustomerForm = {
   customer_name: '',
   customer_phone: '',
@@ -212,7 +143,9 @@ const readStorage = <T,>(key: string, fallback: T): T => {
 const generateOrderCode = () => `FU-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
 
 function App() {
-  const [products, setProducts] = useState<Product[]>(FALLBACK_PRODUCTS)
+  const [products, setProducts] = useState<Product[]>([])
+  const [isLoadingProducts, setIsLoadingProducts] = useState(true)
+  const [productLoadError, setProductLoadError] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey>('all')
   const [cart, setCart] = useState<CartItem[]>(() => readStorage<CartItem[]>('fuzzy-cart', []))
   const [checkoutForm, setCheckoutForm] = useState<CustomerForm>(DEFAULT_CUSTOMER_FORM)
@@ -253,23 +186,28 @@ function App() {
 
   useEffect(() => {
     const loadProducts = async () => {
+      setIsLoadingProducts(true)
       const supabase = getSupabase()
       if (!supabase) {
-        setProducts(FALLBACK_PRODUCTS)
+        setProductLoadError('Supabase is not configured in this deployment.')
+        setIsLoadingProducts(false)
         return
       }
 
       try {
         const { data, error } = await supabase.from('products').select('*')
-        if (!error && Array.isArray(data) && data.length > 0) {
+        if (!error && Array.isArray(data)) {
           setProducts(data.map((product) => normalizeProduct(product as Record<string, unknown>)))
+          setIsLoadingProducts(false)
           return
         }
+
+        setProductLoadError(error?.message ?? 'The products table returned an invalid response.')
       } catch {
-        // Gracefully fall back to local demo catalog when the project is not connected.
+        setProductLoadError('The storefront could not reach the Supabase products table.')
       }
 
-      setProducts(FALLBACK_PRODUCTS)
+      setIsLoadingProducts(false)
     }
 
     const loadOrders = async () => {
@@ -401,6 +339,58 @@ function App() {
     selectedCategory === 'all'
       ? products
       : products.filter((product) => product.category === selectedCategory)
+
+  if (isLoadingProducts && products.length === 0) {
+    return (
+      <div className="app-shell">
+        <header className="topbar">
+          <div className="brand-block">
+            <div className="brand-mark">FS</div>
+            <div>
+              <div className="brand-name">Fuzzy Store</div>
+              <div className="brand-tag">Connecting to Supabase...</div>
+            </div>
+          </div>
+        </header>
+
+        <main className="page-shell">
+          <section className="hero-section">
+            <div className="hero-copy">
+              <span className="eyebrow">Loading live inventory</span>
+              <h1>Fetching the latest products from your store.</h1>
+              <p>Please wait while the storefront syncs with the live Supabase catalog.</p>
+            </div>
+          </section>
+        </main>
+      </div>
+    )
+  }
+
+  if (productLoadError && products.length === 0) {
+    return (
+      <div className="app-shell">
+        <header className="topbar">
+          <div className="brand-block">
+            <div className="brand-mark">FS</div>
+            <div>
+              <div className="brand-name">Fuzzy Store</div>
+              <div className="brand-tag">Live catalog unavailable</div>
+            </div>
+          </div>
+        </header>
+
+        <main className="page-shell">
+          <section className="hero-section">
+            <div className="hero-copy">
+              <span className="eyebrow">Supabase connection error</span>
+              <h1>The live products could not be loaded.</h1>
+              <p>{productLoadError}</p>
+            </div>
+          </section>
+        </main>
+      </div>
+    )
+  }
 
   const addToCart = (product: Product, flavor?: string) => {
     if (product.flavors.length > 0 && !flavor) {
