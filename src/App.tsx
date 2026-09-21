@@ -157,6 +157,7 @@ function App() {
   const [adminForm, setAdminForm] = useState({ email: 'admin@fuzzy.store', password: 'admin1234' })
   const [adminLoggedIn, setAdminLoggedIn] = useState(() => localStorage.getItem('fuzzy-admin') === 'true')
   const [adminOrders, setAdminOrders] = useState<OrderRecord[]>([])
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [adminSearch, setAdminSearch] = useState('')
   const [adminStatusFilter, setAdminStatusFilter] = useState('all')
   const [scanMode, setScanMode] = useState<'manual' | 'camera' | 'idle'>('manual')
@@ -180,9 +181,24 @@ function App() {
     return { subtotal, total: subtotal }
   }, [cart, productMap])
 
+  const selectedOrder =
+    adminOrders.find((order) => order.id === selectedOrderId) ??
+    (adminOrders.length > 0 ? adminOrders[0] : null)
+
   useEffect(() => {
     localStorage.setItem('fuzzy-cart', JSON.stringify(cart))
   }, [cart])
+
+  useEffect(() => {
+    if (adminLoggedIn) {
+      setReceipt(null)
+      setSelectedOrderId(null)
+      localStorage.setItem('fuzzy-admin', 'true')
+      return
+    }
+
+    localStorage.setItem('fuzzy-admin', 'false')
+  }, [adminLoggedIn])
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -244,15 +260,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!adminLoggedIn) {
-      localStorage.setItem('fuzzy-admin', 'false')
-      return
-    }
-
-    localStorage.setItem('fuzzy-admin', 'true')
-  }, [adminLoggedIn])
-
-  useEffect(() => {
     if (scanMode !== 'camera') {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop())
@@ -307,6 +314,10 @@ function App() {
             if (value) {
               setScanCode(value)
               setScanMode('manual')
+              const match = adminOrders.find((order) => order.order_code === value)
+              if (match) {
+                setSelectedOrderId(match.id)
+              }
               return
             }
           } catch {
@@ -333,7 +344,7 @@ function App() {
         streamRef.current.getTracks().forEach((track) => track.stop())
       }
     }
-  }, [scanMode])
+  }, [scanMode, adminOrders])
 
   const filteredProducts =
     selectedCategory === 'all'
@@ -537,8 +548,8 @@ function App() {
         }
 
         if (insertError) {
-          setError(`Order creation failed: ${insertError.message}`)
-          return
+          console.error('Supabase order insert failed:', insertError)
+          setNotice('Database order saving failed. Saving this order locally instead.')
         }
       } catch {
         setError('Unable to reach the Supabase project for this order. Please try again in a moment.')
@@ -590,6 +601,7 @@ function App() {
     if (adminForm.email === adminEmail && adminForm.password === adminPassword) {
       setAdminLoggedIn(true)
       setAdminVisible(true)
+      setReceipt(null)
       setNotice('Admin access enabled.')
       return
     }
@@ -608,6 +620,7 @@ function App() {
               order.id === orderId ? { ...order, status: nextStatus } : order,
             ),
           )
+          setSelectedOrderId(orderId)
           return
         }
       } catch {
@@ -621,6 +634,7 @@ function App() {
     )
     localStorage.setItem('fuzzy-orders', JSON.stringify(nextOrders))
     setAdminOrders(nextOrders)
+    setSelectedOrderId(orderId)
   }
 
   const filteredOrders = adminOrders.filter((order) => {
@@ -964,6 +978,7 @@ function App() {
                       onClick={() => {
                         const match = adminOrders.find((order) => order.order_code === scanCode)
                         if (match) {
+                          setSelectedOrderId(match.id)
                           setScanCode(match.order_code)
                           setNotice(`Order ${match.order_code} selected for validation.`)
                         } else {
@@ -983,12 +998,23 @@ function App() {
                 {scannerError && <p className="error-text">{scannerError}</p>}
               </div>
 
+              {selectedOrder && (
+                <div className="selected-order-card">
+                  <strong>Selected order:</strong> {selectedOrder.order_code}
+                  <span> — {selectedOrder.customer_name}</span>
+                </div>
+              )}
+
               <div className="admin-order-list">
                 {filteredOrders.length === 0 ? (
                   <p className="empty-state">No orders match this filter.</p>
                 ) : (
                   filteredOrders.map((order) => (
-                    <article key={order.id} className="order-card">
+                    <article
+                      key={order.id}
+                      className={selectedOrderId === order.id ? 'order-card selected' : 'order-card'}
+                      onClick={() => setSelectedOrderId(order.id)}
+                    >
                       <div className="order-card-header">
                         <div>
                           <strong>{order.order_code}</strong>
@@ -1092,7 +1118,7 @@ function App() {
                 Print receipt
               </button>
               <button type="button" className="secondary-button" onClick={downloadReceipt}>
-                Download QR
+                Download receipt
               </button>
               <button type="button" className="ghost-button" onClick={() => setReceipt(null)}>
                 Continue shopping
