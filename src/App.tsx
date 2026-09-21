@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import QRCode from 'qrcode'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import './App.css'
@@ -31,7 +31,6 @@ function App() {
   const [name, setName] = useState(''); const [phone, setPhone] = useState(''); const [payment, setPayment] = useState('cash')
   const [message, setMessage] = useState(''); const [admin, setAdmin] = useState(() => localStorage.getItem('fuzzy-admin') === 'true'); const [loginOpen, setLoginOpen] = useState(false)
   const [credentials, setCredentials] = useState({ email: 'admin@fuzzy.store', password: 'admin1234' }); const [lookup, setLookup] = useState('')
-  const video = useRef<HTMLVideoElement>(null)
   const filtered = category === 'all' ? products : products.filter((product) => product.category === category)
   const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
 
