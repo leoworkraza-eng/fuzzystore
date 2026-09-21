@@ -1,54 +1,531 @@
 import { useEffect, useMemo, useState } from 'react'
-import QRCode from 'qrcode'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import './App.css'
 
 type Category = 'all' | 'candies' | 'snacks' | 'fresh_drinks' | 'energy_drinks' | 'protein_snacks' | 'alcohol_cocktails'
-type Product = { id: string; name: string; price: number; stock: number; category: string; image_url?: string; flavors?: string[]; description?: string }
-type CartItem = { productId: string; name: string; price: number; quantity: number; flavor?: string }
-type Order = { id: string; order_code: string; customer_name: string; customer_phone: string; items: CartItem[]; total: number; payment_method: string; status: string; created_at: string }
 
-const categories: Array<{ key: Category; label: string; tone: string }> = [
-  { key: 'all', label: 'All products', tone: '#f2e8d8' }, { key: 'candies', label: 'Candies', tone: '#e8b84b' },
-  { key: 'snacks', label: 'Snacks', tone: '#d9a441' }, { key: 'fresh_drinks', label: 'Fresh drinks', tone: '#f5d9b7' },
-  { key: 'energy_drinks', label: 'Energy drinks', tone: '#c34b43' }, { key: 'protein_snacks', label: 'Protein snacks', tone: '#823d28' },
-  { key: 'alcohol_cocktails', label: 'Alcohol & cocktails', tone: '#4b1d2d' },
-]
-const getDb = (): SupabaseClient | null => { const url = import.meta.env.VITE_SUPABASE_URL?.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, ''); const key = import.meta.env.VITE_SUPABASE_ANON_KEY; return url?.startsWith('https://') && key ? createClient(url, key, { auth: { persistSession: false } }) : null }
-const money = (value: number) => new Intl.NumberFormat('fr-MG', { style: 'currency', currency: 'MGA', maximumFractionDigits: 0 }).format(value)
-const read = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) || '') as T } catch { return fallback } }
-const mapProduct = (row: Record<string, unknown>): Product => ({ id: String(row.id), name: String(row.name ?? 'Product'), price: Number(row.price ?? 0), stock: Number(row.stock ?? row.quantity ?? 0), category: String(row.category ?? 'snacks'), image_url: String(row.image_url ?? ''), flavors: Array.isArray(row.flavors) ? row.flavors as string[] : [], description: String(row.description ?? 'Imported specialty product.') })
-const mapOrder = (row: Record<string, unknown>): Order => ({ id: String(row.id), order_code: String(row.order_code ?? ''), customer_name: String(row.customer_name ?? ''), customer_phone: String(row.customer_phone ?? ''), items: Array.isArray(row.items) ? row.items as CartItem[] : [], total: Number(row.total ?? 0), payment_method: String(row.payment_method ?? 'cash'), status: String(row.status ?? 'pending'), created_at: String(row.created_at ?? '') })
-
-function App() {
-  const db = useMemo(getDb, [])
-  const [products, setProducts] = useState<Product[]>([])
-  const [orders, setOrders] = useState<Order[]>([])
-  const [category, setCategory] = useState<Category>('all')
-  const [cart, setCart] = useState<CartItem[]>(() => read('fuzzy-cart', []))
-  const [cartOpen, setCartOpen] = useState(false)
-  const [receipt, setReceipt] = useState<(Order & { qr: string }) | null>(null)
-  const [name, setName] = useState(''); const [phone, setPhone] = useState(''); const [payment, setPayment] = useState('cash')
-  const [message, setMessage] = useState(''); const [admin, setAdmin] = useState(() => localStorage.getItem('fuzzy-admin') === 'true'); const [loginOpen, setLoginOpen] = useState(false)
-  const [credentials, setCredentials] = useState({ email: 'admin@fuzzy.store', password: 'admin1234' }); const [lookup, setLookup] = useState('')
-  const filtered = category === 'all' ? products : products.filter((product) => product.category === category)
-  const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
-
-  useEffect(() => { localStorage.setItem('fuzzy-admin', String(admin)) }, [admin])
-  useEffect(() => { localStorage.setItem('fuzzy-cart', JSON.stringify(cart)) }, [cart])
-  useEffect(() => { const load = async () => { if (!db) { setMessage('Supabase is not configured. Add products in Supabase to display them here.'); return }; const [{ data: productRows, error: productsError }, { data: orderRows }] = await Promise.all([db.from('products').select('*'), db.from('orders').select('*').order('created_at', { ascending: false })]); if (productsError) setMessage(`Products could not be loaded: ${productsError.message}`); if (productRows) setProducts(productRows.map((row) => mapProduct(row as Record<string, unknown>))); if (orderRows) setOrders(orderRows.map((row) => mapOrder(row as Record<string, unknown>))) }; void load() }, [db])
-
-  const add = (product: Product) => setCart((current) => { const found = current.find((item) => item.productId === product.id); return found ? current.map((item) => item.productId === product.id ? { ...item, quantity: Math.min(item.quantity + 1, product.stock) } : item) : [...current, { productId: product.id, name: product.name, price: product.price, quantity: 1 }] })
-  const checkout = async () => { if (!name.trim() || !phone.trim() || !cart.length) return setMessage('Enter your name and phone, then add a product.'); const order: Order = { id: crypto.randomUUID(), order_code: `FU-${Math.random().toString(36).slice(2, 8).toUpperCase()}`, customer_name: name.trim(), customer_phone: phone.trim(), items: cart, total, payment_method: payment, status: 'pending', created_at: new Date().toISOString() }; if (!db) return setMessage('Supabase is not configured, so the order cannot be saved.'); const { error } = await db.from('orders').insert(order); if (error) return setMessage(`Order failed: ${error.message}`); setOrders((current) => [order, ...current]); const qr = await QRCode.toDataURL(order.order_code, { width: 320, margin: 2 }); setReceipt({ ...order, qr }); setCart([]); setName(''); setPhone(''); setCartOpen(false); setMessage('Order placed successfully.') }
-  const download = () => { if (!receipt) return; const link = document.createElement('a'); link.href = receipt.qr; link.download = `${receipt.order_code}-receipt.png`; link.click() }
-  const login = (event: React.FormEvent) => { event.preventDefault(); const email = import.meta.env.VITE_ADMIN_EMAIL ?? 'admin@fuzzy.store'; const password = import.meta.env.VITE_ADMIN_PASSWORD ?? 'admin1234'; if (credentials.email === email && credentials.password === password) { setAdmin(true); setLoginOpen(false); setReceipt(null) } else setMessage('Incorrect admin credentials.') }
-  const updateStatus = async (order: Order, status: 'validated' | 'cancelled') => { if (!db) return setMessage('Supabase is not configured.'); const { data, error } = await db.from('orders').update({ status }).eq('id', order.id).select('id,status').single(); if (error || !data) return setMessage(`Database update failed: ${error?.message ?? 'order not found'}`); setOrders((current) => current.map((item) => item.id === order.id ? { ...item, status } : item)); setMessage(`${order.order_code} is now ${status}.`) }
-  const openOrder = () => { const code = lookup.trim().split('/').filter(Boolean).pop()?.toLowerCase(); const match = orders.find((order) => order.order_code.toLowerCase() === code); setMessage(match ? `Order ${match.order_code} opened.` : 'No matching order code found.') }
-
-  if (admin) return <Admin orders={orders} lookup={lookup} setLookup={setLookup} openOrder={openOrder} updateStatus={updateStatus} logout={() => setAdmin(false)} message={message} />
-  return <div className="app-shell customer-shell"><header className="topbar"><div className="brand-block"><div className="brand-mark">FS</div><div><div className="brand-name">Fuzzy Store</div><div className="brand-tag">Imported snacks & spirits</div></div></div><nav className="category-nav" aria-label="Product categories">{categories.map((item) => <button type="button" key={item.key} className={category === item.key ? 'nav-pill active' : 'nav-pill'} style={item.key === 'all' ? undefined : { background: item.tone }} onClick={() => setCategory(item.key)}>{item.label}</button>)}</nav><div className="topbar-actions"><button type="button" className="secondary-button" onClick={() => setLoginOpen(true)}>Admin Login</button><button type="button" className="cart-button" onClick={() => setCartOpen(true)}>Cart ({cart.reduce((sum, item) => sum + item.quantity, 0)})</button></div></header><main className="page-shell"><section className="hero-section new-hero"><div><span className="eyebrow">A little joy, delivered</span><h1>Good snacks. Great moments.</h1><p>Explore imported favourites, fresh drinks and late-night treats.</p><button type="button" className="primary-button" onClick={() => document.getElementById('products')?.scrollIntoView({ behavior: 'smooth' })}>Explore collection</button></div><div className="hero-visual"><div className="lemur">◕ᴥ◕</div><strong>Fresh picks<br />for every mood</strong></div></section><section id="products" className="content-grid"><div className="product-panel"><div className="section-header"><h2>Products</h2><span>{filtered.length} items</span></div>{filtered.length === 0 ? <div className="empty-cart"><p>No products found in this category.</p></div> : <div className="product-grid">{filtered.map((product) => <article className="product-card" key={product.id}><div className="product-image-wrap"><img src={product.image_url || 'https://placehold.co/600x400/2f1c2e/efe5d0?text=Fuzzy+Store'} alt={product.name} /><span className="stock-pill">{product.stock} left</span></div><div className="product-body"><div className="product-meta-row"><span className="category-badge">{product.category.replaceAll('_', ' ')}</span><strong className="price">{money(product.price)}</strong></div><h3>{product.name}</h3><p>{product.description}</p><button type="button" className="primary-button full-width" disabled={product.stock <= 0} onClick={() => add(product)}>{product.stock ? 'Add to cart' : 'Out of stock'}</button></div></article>)}</div>}</div></section></main>{cartOpen && <aside className="cart-panel mobile-cart"><div className="cart-header"><h2>Your cart</h2><button type="button" className="ghost-button" onClick={() => setCartOpen(false)}>Close</button></div>{cart.map((item) => <div className="cart-item" key={item.productId}><span>{item.name} × {item.quantity}</span><strong>{money(item.price * item.quantity)}</strong></div>)}<div className="totals-box"><strong>Total {money(total)}</strong></div><input placeholder="Your name" value={name} onChange={(event) => setName(event.target.value)} /><input placeholder="Phone" value={phone} onChange={(event) => setPhone(event.target.value)} /><select value={payment} onChange={(event) => setPayment(event.target.value)}><option value="cash">Cash</option><option value="mvola">Mvola</option><option value="card">Card</option></select><button type="button" className="primary-button full-width" onClick={() => void checkout()}>Place order</button></aside>}{loginOpen && <div className="modal-backdrop"><form className="panel admin-signin" onSubmit={login}><button type="button" className="ghost-button" onClick={() => setLoginOpen(false)}>Close</button><h2>Admin access</h2><input value={credentials.email} onChange={(event) => setCredentials({ ...credentials, email: event.target.value })} /><input type="password" value={credentials.password} onChange={(event) => setCredentials({ ...credentials, password: event.target.value })} /><button type="submit" className="primary-button">Open dashboard</button></form></div>}{receipt && <section className="receipt-panel panel"><div className="receipt-box"><div className="receipt-printer">🦝 <span>Receipt ready</span></div><h2>Order confirmed</h2><p>{receipt.order_code} · {receipt.customer_name}</p>{receipt.items.map((item) => <div className="receipt-item" key={item.productId}><span>{item.name} × {item.quantity}</span><strong>{money(item.price * item.quantity)}</strong></div>)}<div className="receipt-total"><strong>Total</strong><strong>{money(receipt.total)}</strong></div><img className="receipt-qr-block" src={receipt.qr} alt="Order QR code" /><button type="button" className="primary-button full-width" onClick={download}>Download receipt</button><button type="button" className="ghost-button full-width" onClick={() => setReceipt(null)}>Continue shopping</button></div></section>}{message && <div className="toast info">{message}</div>}</div>
+type Product = {
+  id: string
+  name: string
+  price: number
+  stock: number
+  category: string
+  image_url: string
+  description: string
 }
 
-function Admin({ orders, lookup, setLookup, openOrder, updateStatus, logout, message }: { orders: Order[]; lookup: string; setLookup: (value: string) => void; openOrder: () => void; updateStatus: (order: Order, status: 'validated' | 'cancelled') => Promise<void>; logout: () => void; message: string }) { return <div className="admin-shell"><header className="admin-header"><div><small>FUZZY STORE / OPERATIONS</small><h1>Order control center</h1><p>Manage live orders and update their status.</p></div><button type="button" className="secondary-button" onClick={logout}>Exit admin</button></header><main className="admin-content"><section className="admin-tools"><h2>Find an order</h2><div className="manual-lookup"><input value={lookup} onChange={(event) => setLookup(event.target.value)} placeholder="Order code, e.g. FU-ABC123" /><button type="button" className="primary-button" onClick={openOrder}>Open order</button></div></section><section className="admin-orders"><div className="section-header"><h2>Orders</h2><span>{orders.length} total</span></div>{orders.length ? orders.map((order) => <article className="order-card" key={order.id}><div className="order-card-header"><div><strong>{order.order_code}</strong><span>{order.customer_name} · {order.customer_phone}</span></div><span className={`status-badge ${order.status}`}>{order.status}</span></div><div className="order-card-body"><p>{money(order.total)}</p><p>{new Date(order.created_at).toLocaleString()}</p></div><div className="order-actions"><button type="button" className="primary-button" disabled={order.status === 'validated'} onClick={() => void updateStatus(order, 'validated')}>Validate</button><button type="button" className="ghost-button" disabled={order.status === 'cancelled'} onClick={() => void updateStatus(order, 'cancelled')}>Cancel</button></div></article>) : <p className="empty-state">No orders found.</p>}</section></main>{message && <div className="toast info">{message}</div>}</div> }
+type CartItem = {
+  productId: string
+  name: string
+  price: number
+  quantity: number
+}
+
+type Order = {
+  id: string
+  order_code: string
+  customer_name: string
+  customer_phone: string
+  items: CartItem[]
+  total: number
+  payment_method: string
+  status: 'pending' | 'validated' | 'cancelled'
+  created_at: string
+}
+
+const categories: Array<{ key: Category; label: string }> = [
+  { key: 'all', label: 'All products' },
+  { key: 'candies', label: 'Candies' },
+  { key: 'snacks', label: 'Snacks' },
+  { key: 'fresh_drinks', label: 'Fresh drinks' },
+  { key: 'energy_drinks', label: 'Energy drinks' },
+  { key: 'protein_snacks', label: 'Protein snacks' },
+  { key: 'alcohol_cocktails', label: 'Alcohol & cocktails' },
+]
+
+const defaultProducts: Product[] = [
+  {
+    id: 'gatorade-red',
+    name: 'Gatorade',
+    price: 20000,
+    stock: 10,
+    category: 'energy_drinks',
+    image_url: 'https://images.unsplash.com/photo-1544145945-f90425340c7e?auto=format&fit=crop&w=900&q=80',
+    description: 'Imported performance drink with a bright citrus finish.',
+  },
+  {
+    id: 'monster',
+    name: 'Monster',
+    price: 14000,
+    stock: 30,
+    category: 'energy_drinks',
+    image_url: 'https://images.unsplash.com/photo-1571175443880-49e1d6317b6a?auto=format&fit=crop&w=900&q=80',
+    description: 'Classic energy boost with bold flavor and intense kick.',
+  },
+  {
+    id: 'redbull',
+    name: 'RedBull',
+    price: 13000,
+    stock: 10,
+    category: 'energy_drinks',
+    image_url: 'https://images.unsplash.com/photo-1600952841320-db92ec4047ca?auto=format&fit=crop&w=900&q=80',
+    description: 'Smooth, crisp energy can made for busy days and nights.',
+  },
+  {
+    id: 'kom-vida',
+    name: 'Kom Vida',
+    price: 18000,
+    stock: 8,
+    category: 'fresh_drinks',
+    image_url: 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=1200&q=80',
+    description: 'Imported specialty product with a clean, bright profile.',
+  },
+  {
+    id: 'vitamin-well',
+    name: 'Vitamin Well Reload',
+    price: 30000,
+    stock: 20,
+    category: 'protein_snacks',
+    image_url: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?auto=format&fit=crop&w=1200&q=80',
+    description: 'Hydration and nutrients in a premium wellness blend.',
+  },
+]
+
+const defaultOrders: Order[] = [
+  {
+    id: '1',
+    order_code: 'FU-ALPHA1',
+    customer_name: 'Nadia',
+    customer_phone: '+261 34 11 22 33',
+    items: [{ productId: 'gatorade-red', name: 'Gatorade', price: 20000, quantity: 1 }],
+    total: 20000,
+    payment_method: 'cash',
+    status: 'pending',
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: '2',
+    order_code: 'FU-BRAVO2',
+    customer_name: 'Mihaja',
+    customer_phone: '+261 32 99 00 10',
+    items: [{ productId: 'monster', name: 'Monster', price: 14000, quantity: 2 }],
+    total: 28000,
+    payment_method: 'mvola',
+    status: 'validated',
+    created_at: new Date(Date.now() - 3600000).toISOString(),
+  },
+]
+
+const money = (value: number) =>
+  new Intl.NumberFormat('fr-MG', {
+    style: 'currency',
+    currency: 'MGA',
+    maximumFractionDigits: 0,
+  }).format(value)
+
+const readCart = (): CartItem[] => {
+  try {
+    const raw = localStorage.getItem('fuzzy-cart')
+    return raw ? (JSON.parse(raw) as CartItem[]) : []
+  } catch {
+    return []
+  }
+}
+
+function App() {
+  const [products] = useState<Product[]>(defaultProducts)
+  const [orders, setOrders] = useState<Order[]>(defaultOrders)
+  const [category, setCategory] = useState<Category>('all')
+  const [cart, setCart] = useState<CartItem[]>(readCart)
+  const [cartOpen, setCartOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [payment, setPayment] = useState('cash')
+  const [adminOpen, setAdminOpen] = useState(false)
+  const [adminLoggedIn, setAdminLoggedIn] = useState(() => localStorage.getItem('fuzzy-admin') === 'true')
+  const [credentials, setCredentials] = useState({ email: 'admin@fuzzy.store', password: 'admin1234' })
+  const [toast, setToast] = useState<string | null>(null)
+  const [receipt, setReceipt] = useState<Order | null>(null)
+
+  useEffect(() => {
+    localStorage.setItem('fuzzy-cart', JSON.stringify(cart))
+  }, [cart])
+
+  useEffect(() => {
+    localStorage.setItem('fuzzy-admin', String(adminLoggedIn))
+  }, [adminLoggedIn])
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(null), 2500)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  const filteredProducts = useMemo(
+    () => (category === 'all' ? products : products.filter((product) => product.category === category)),
+    [category, products],
+  )
+
+  const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
+
+  const addToCart = (product: Product) => {
+    setCart((current) => {
+      const existing = current.find((item) => item.productId === product.id)
+      if (existing) {
+        return current.map((item) =>
+          item.productId === product.id ? { ...item, quantity: Math.min(item.quantity + 1, product.stock) } : item,
+        )
+      }
+      return [...current, { productId: product.id, name: product.name, price: product.price, quantity: 1 }]
+    })
+    setToast(`${product.name} added to cart`)
+  }
+
+  const placeOrder = () => {
+    if (!name.trim() || !phone.trim() || cart.length === 0) {
+      setToast('Add a product and enter your details before placing an order.')
+      return
+    }
+
+    const newOrder: Order = {
+      id: crypto.randomUUID(),
+      order_code: `FU-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      customer_name: name.trim(),
+      customer_phone: phone.trim(),
+      items: cart,
+      total,
+      payment_method: payment,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    }
+
+    setOrders((current) => [newOrder, ...current])
+    setReceipt(newOrder)
+    setCart([])
+    setName('')
+    setPhone('')
+    setPayment('cash')
+    setCartOpen(false)
+    setToast('Order placed successfully.')
+  }
+
+  const updateOrderStatus = (id: string, status: 'validated' | 'cancelled') => {
+    setOrders((current) =>
+      current.map((order) => (order.id === id ? { ...order, status } : order)),
+    )
+    setToast(`Order updated to ${status}.`)
+  }
+
+  const loginAdmin = (event: React.FormEvent) => {
+    event.preventDefault()
+    const email = import.meta.env.VITE_ADMIN_EMAIL ?? 'admin@fuzzy.store'
+    const password = import.meta.env.VITE_ADMIN_PASSWORD ?? 'admin1234'
+
+    if (credentials.email === email && credentials.password === password) {
+      setAdminLoggedIn(true)
+      setAdminOpen(false)
+      setToast('Admin access granted.')
+      return
+    }
+
+    setToast('Incorrect admin credentials.')
+  }
+
+  if (adminLoggedIn) {
+    return (
+      <div className="admin-shell">
+        <header className="admin-header">
+          <div>
+            <small>FUZZY STORE / OPERATIONS</small>
+            <h1>Order control center</h1>
+            <p>Review and manage incoming orders.</p>
+          </div>
+          <button type="button" className="secondary-button" onClick={() => setAdminLoggedIn(false)}>
+            Log out
+          </button>
+        </header>
+
+        <main className="admin-content">
+          <section className="admin-tools">
+            <h2>Find an order</h2>
+            <div className="manual-lookup">
+              <input type="text" placeholder="Order code e.g. FU-ABC123" />
+              <button type="button" className="primary-button">
+                Open order
+              </button>
+            </div>
+          </section>
+
+          <section className="admin-orders">
+            <div className="section-header admin-section-header">
+              <h2>Orders</h2>
+              <span>{orders.length} total</span>
+            </div>
+
+            {orders.length === 0 ? (
+              <p className="empty-state">No orders yet.</p>
+            ) : (
+              orders.map((order) => (
+                <article className="order-card" key={order.id}>
+                  <div className="order-card-header">
+                    <div>
+                      <strong>{order.order_code}</strong>
+                      <span>
+                        {order.customer_name} · {order.customer_phone}
+                      </span>
+                    </div>
+                    <span className={`status-badge ${order.status}`}>{order.status}</span>
+                  </div>
+
+                  <div className="order-card-body">
+                    <p>{money(order.total)}</p>
+                    <p>{new Date(order.created_at).toLocaleString()}</p>
+                  </div>
+
+                  <div className="order-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={order.status === 'validated'}
+                      onClick={() => updateOrderStatus(order.id, 'validated')}
+                    >
+                      Validate
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      disabled={order.status === 'cancelled'}
+                      onClick={() => updateOrderStatus(order.id, 'cancelled')}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </section>
+        </main>
+
+        {toast && <div className="toast info">{toast}</div>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div className="brand-block">
+          <div className="brand-mark">FS</div>
+          <div>
+            <div className="brand-name">Fuzzy Store</div>
+            <div className="brand-tag">Imported snacks & spirits</div>
+          </div>
+        </div>
+
+        <nav className="category-nav" aria-label="Product categories">
+          {categories.map((item) => (
+            <button
+              type="button"
+              key={item.key}
+              className={category === item.key ? 'nav-pill active' : 'nav-pill'}
+              onClick={() => setCategory(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="topbar-actions">
+          <button type="button" className="secondary-button" onClick={() => setAdminOpen(true)}>
+            Admin Login
+          </button>
+          <button type="button" className="cart-button" onClick={() => setCartOpen(true)}>
+            Cart ({cart.reduce((sum, item) => sum + item.quantity, 0)})
+          </button>
+        </div>
+      </header>
+
+      <main className="page-shell">
+        <section className="hero-section">
+          <div className="hero-copy">
+            <span className="eyebrow">A little joy, delivered</span>
+            <h1>Good snacks. Great moments.</h1>
+            <p>Explore imported favourites, fresh drinks and late-night treats.</p>
+            <div className="hero-actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => window.document.getElementById('products')?.scrollIntoView({ behavior: 'smooth' })}
+              >
+                Explore collection
+              </button>
+            </div>
+          </div>
+          <div className="hero-card">
+            <div className="hero-card-label">Best seller</div>
+            <div className="hero-card-product">Kom Vida</div>
+            <div className="hero-card-price">18 000 Ar</div>
+          </div>
+        </section>
+
+        <section id="products" className="content-grid">
+          <div className="product-panel">
+            <div className="section-header">
+              <h2>Products</h2>
+              <span>{filteredProducts.length} items</span>
+            </div>
+
+            <div className="product-grid">
+              {filteredProducts.map((product) => (
+                <article className="product-card" key={product.id}>
+                  <div className="product-image-wrap">
+                    <img src={product.image_url} alt={product.name} />
+                    <span className="stock-pill">{product.stock} left</span>
+                  </div>
+
+                  <div className="product-body">
+                    <div className="product-meta-row">
+                      <span className="category-badge">{product.category.replaceAll('_', ' ')}</span>
+                      <strong className="price">{money(product.price)}</strong>
+                    </div>
+
+                    <h3>{product.name}</h3>
+                    <p>{product.description}</p>
+
+                    <button type="button" className="primary-button full-width" onClick={() => addToCart(product)}>
+                      Add to cart
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+
+          {cartOpen && (
+            <aside className="cart-panel">
+              <div className="cart-header">
+                <h2>Your cart</h2>
+                <button type="button" className="ghost-button" onClick={() => setCartOpen(false)}>
+                  Close
+                </button>
+              </div>
+
+              {cart.length === 0 ? (
+                <div className="empty-cart">No items in cart.</div>
+              ) : (
+                <div className="cart-items">
+                  {cart.map((item) => (
+                    <div className="cart-item" key={item.productId}>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <span>{money(item.price)} each</span>
+                      </div>
+                      <div className="cart-item-actions">
+                        <small>Qty: {item.quantity}</small>
+                        <strong>{money(item.price * item.quantity)}</strong>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="totals-box">
+                <div>
+                  <span>Total</span>
+                  <strong>{money(total)}</strong>
+                </div>
+              </div>
+
+              <div className="checkout-form">
+                <input placeholder="Your name" value={name} onChange={(event) => setName(event.target.value)} />
+                <input placeholder="Phone" value={phone} onChange={(event) => setPhone(event.target.value)} />
+                <select value={payment} onChange={(event) => setPayment(event.target.value)}>
+                  <option value="cash">Cash</option>
+                  <option value="mvola">Mvola</option>
+                  <option value="card">Card</option>
+                </select>
+                <button type="button" className="primary-button full-width" onClick={placeOrder}>
+                  Place order
+                </button>
+              </div>
+            </aside>
+          )}
+        </section>
+      </main>
+
+      {adminOpen && (
+        <div className="modal-backdrop">
+          <form className="panel admin-signin" onSubmit={loginAdmin}>
+            <button type="button" className="ghost-button close-inline" onClick={() => setAdminOpen(false)}>
+              Close
+            </button>
+            <h2>Admin access</h2>
+            <input
+              type="email"
+              value={credentials.email}
+              onChange={(event) => setCredentials((current) => ({ ...current, email: event.target.value }))}
+            />
+            <input
+              type="password"
+              value={credentials.password}
+              onChange={(event) => setCredentials((current) => ({ ...current, password: event.target.value }))}
+            />
+            <button type="submit" className="primary-button">
+              Open dashboard
+            </button>
+          </form>
+        </div>
+      )}
+
+      {receipt && (
+        <section className="receipt-panel panel">
+          <div className="receipt-box">
+            <div className="receipt-header">
+              <div>
+                <span className="receipt-order">{receipt.order_code}</span>
+                <h3>Receipt</h3>
+              </div>
+              <strong>{receipt.status}</strong>
+            </div>
+
+            <div className="receipt-meta">
+              <p>
+                <span>Customer</span>
+                <strong>{receipt.customer_name}</strong>
+              </p>
+              <p>
+                <span>Phone</span>
+                <strong>{receipt.customer_phone}</strong>
+              </p>
+            </div>
+
+            <div className="receipt-items">
+              {receipt.items.map((item) => (
+                <div className="receipt-item" key={`${receipt.id}-${item.productId}`}>
+                  <span>
+                    {item.name} × {item.quantity}
+                  </span>
+                  <strong>{money(item.price * item.quantity)}</strong>
+                </div>
+              ))}
+            </div>
+
+            <div className="receipt-total">
+              <span>Total</span>
+              <strong>{money(receipt.total)}</strong>
+            </div>
+
+            <div className="receipt-actions">
+              <button type="button" className="primary-button" onClick={() => setReceipt(null)}>
+                Continue shopping
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {toast && <div className="toast info">{toast}</div>}
+    </div>
+  )
+}
 
 export default App
