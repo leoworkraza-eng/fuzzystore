@@ -838,3 +838,14 @@ button:disabled {
     gap: 8px;
   }
 }
+
+.db-warning {
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 176, 32, 0.4);
+  border-radius: 12px;
+  background: rgba(255, 176, 32, 0.08);
+  color: #b26a00;
+  font-size: 14px;
+  line-height: 1.5;
+}

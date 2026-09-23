@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import './App.css'
+
+const getSupabase = (): SupabaseClient | null => {
+  const url = import.meta.env.VITE_SUPABASE_URL
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+  if (!url || !anonKey || !url.startsWith('https://')) {
+    return null
+  }
+
+  return createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+}
+
+const supabase = getSupabase()
 
 type Category = 'all' | 'candies' | 'snacks' | 'fresh_drinks' | 'energy_drinks' | 'protein_snacks' | 'alcohol_cocktails'
 
@@ -8,8 +24,9 @@ type Product = {
   name: string
   price: number
   stock: number
+  available: boolean
   category: string
-  image_url: string
+  image_url?: string
   description: string
 }
 
@@ -48,8 +65,8 @@ const defaultProducts: Product[] = [
     name: 'Gatorade',
     price: 20000,
     stock: 10,
+    available: true,
     category: 'energy_drinks',
-    image_url: 'https://images.unsplash.com/photo-1544145945-f90425340c7e?auto=format&fit=crop&w=900&q=80',
     description: 'Imported performance drink with a bright citrus finish.',
   },
   {
@@ -57,8 +74,8 @@ const defaultProducts: Product[] = [
     name: 'Monster',
     price: 14000,
     stock: 30,
+    available: true,
     category: 'energy_drinks',
-    image_url: 'https://images.unsplash.com/photo-1571175443880-49e1d6317b6a?auto=format&fit=crop&w=900&q=80',
     description: 'Classic energy boost with bold flavor and intense kick.',
   },
   {
@@ -66,8 +83,8 @@ const defaultProducts: Product[] = [
     name: 'RedBull',
     price: 13000,
     stock: 10,
+    available: true,
     category: 'energy_drinks',
-    image_url: 'https://images.unsplash.com/photo-1600952841320-db92ec4047ca?auto=format&fit=crop&w=900&q=80',
     description: 'Smooth, crisp energy can made for busy days and nights.',
   },
   {
@@ -75,8 +92,8 @@ const defaultProducts: Product[] = [
     name: 'Kom Vida',
     price: 18000,
     stock: 8,
+    available: true,
     category: 'fresh_drinks',
-    image_url: 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=1200&q=80',
     description: 'Imported specialty product with a clean, bright profile.',
   },
   {
@@ -84,8 +101,8 @@ const defaultProducts: Product[] = [
     name: 'Vitamin Well Reload',
     price: 30000,
     stock: 20,
+    available: true,
     category: 'protein_snacks',
-    image_url: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?auto=format&fit=crop&w=1200&q=80',
     description: 'Hydration and nutrients in a premium wellness blend.',
   },
 ]
@@ -131,9 +148,27 @@ const readCart = (): CartItem[] => {
   }
 }
 
+const normalizeProduct = (raw: Record<string, unknown>): Product => ({
+  id: String(raw.id ?? crypto.randomUUID()),
+  name: String(raw.name ?? 'Imported Product'),
+  price: Number(raw.price ?? raw.amount ?? 0),
+  stock: Number(raw.stock ?? raw.quantity ?? raw.inventory ?? 0),
+  available: raw.available === undefined ? Number(raw.stock ?? 0) > 0 : Boolean(raw.available),
+  category: String(raw.category ?? raw.product_category ?? 'snacks'),
+  image_url: String(raw.image_url ?? raw.imageUrl ?? ''),
+  description: String(raw.description ?? 'Imported specialty product.'),
+})
+
+const productPlaceholder =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="600" height="400" fill="%23f3efe9"/><text x="50%" y="50%" text-anchor="middle" fill="%23b6a58c" font-family="sans-serif" font-size="28">FS</text></svg>',
+  )
+
 function App() {
-  const [products] = useState<Product[]>(defaultProducts)
+  const [products, setProducts] = useState<Product[]>(defaultProducts)
   const [orders, setOrders] = useState<Order[]>(defaultOrders)
+  const [productLoadError, setProductLoadError] = useState<string | null>(null)
   const [category, setCategory] = useState<Category>('all')
   const [cart, setCart] = useState<CartItem[]>(readCart)
   const [cartOpen, setCartOpen] = useState(false)
@@ -145,6 +180,34 @@ function App() {
   const [credentials, setCredentials] = useState({ email: 'admin@fuzzy.store', password: 'admin1234' })
   const [toast, setToast] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<Order | null>(null)
+
+  useEffect(() => {
+    if (!supabase) {
+      setProductLoadError('Supabase is not configured on this deployment (missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).')
+      return
+    }
+
+    let cancelled = false
+
+    ;(async () => {
+      const { data, error } = await supabase.from('products').select('*')
+      if (cancelled) return
+
+      if (error) {
+        setProductLoadError(`Could not load products from Supabase: ${error.message}`)
+        return
+      }
+
+      if (Array.isArray(data) && data.length > 0) {
+        setProducts(data.map(normalizeProduct))
+        setProductLoadError(null)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('fuzzy-cart', JSON.stringify(cart))
@@ -161,7 +224,10 @@ function App() {
   }, [toast])
 
   const filteredProducts = useMemo(
-    () => (category === 'all' ? products : products.filter((product) => product.category === category)),
+    () =>
+      (category === 'all' ? products : products.filter((product) => product.category === category)).filter(
+        (product) => product.available !== false,
+      ),
     [category, products],
   )
 
@@ -180,7 +246,7 @@ function App() {
     setToast(`${product.name} added to cart`)
   }
 
-  const placeOrder = () => {
+  const placeOrder = async () => {
     if (!name.trim() || !phone.trim() || cart.length === 0) {
       setToast('Add a product and enter your details before placing an order.')
       return
@@ -198,6 +264,40 @@ function App() {
       created_at: new Date().toISOString(),
     }
 
+    if (supabase) {
+      const { error: insertError } = await supabase.from('orders').insert([
+        {
+          id: newOrder.id,
+          order_code: newOrder.order_code,
+          customer_name: newOrder.customer_name,
+          customer_phone: newOrder.customer_phone,
+          items: newOrder.items,
+          total: newOrder.total,
+          payment_method: newOrder.payment_method,
+          status: newOrder.status,
+          created_at: newOrder.created_at,
+        },
+      ])
+
+      if (insertError) {
+        setToast(`Order could not be saved: ${insertError.message}`)
+        return
+      }
+
+      for (const item of cart) {
+        const product = products.find((entry) => entry.id === item.productId)
+        if (!product) continue
+        try {
+          await supabase
+            .from('products')
+            .update({ stock: Math.max(0, product.stock - item.quantity), available: product.stock - item.quantity > 0 })
+            .eq('id', product.id)
+        } catch {
+          // Keep the order even if the stock update is blocked by permissions.
+        }
+      }
+    }
+
     setOrders((current) => [newOrder, ...current])
     setReceipt(newOrder)
     setCart([])
@@ -208,11 +308,34 @@ function App() {
     setToast('Order placed successfully.')
   }
 
-  const updateOrderStatus = (id: string, status: 'validated' | 'cancelled') => {
+  useEffect(() => {
+    if (!adminLoggedIn || !supabase) return
+
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        setOrders(data as Order[])
+      }
+    })()
+  }, [adminLoggedIn])
+
+  const updateOrderStatus = async (id: string, status: 'validated' | 'cancelled') => {
     setOrders((current) =>
       current.map((order) => (order.id === id ? { ...order, status } : order)),
     )
     setToast(`Order updated to ${status}.`)
+
+    if (supabase) {
+      try {
+        await supabase.from('orders').update({ status }).eq('id', id)
+      } catch {
+        // Keep the optimistic update if the write is blocked by permissions.
+      }
+    }
   }
 
   const loginAdmin = (event: React.FormEvent) => {
@@ -345,6 +468,11 @@ function App() {
       </header>
 
       <main className="page-shell">
+        {productLoadError && (
+          <div className="db-warning" role="alert">
+            ⚠️ {productLoadError}
+          </div>
+        )}
         <section className="hero-section">
           <div className="hero-copy">
             <span className="eyebrow">A little joy, delivered</span>
@@ -378,7 +506,7 @@ function App() {
               {filteredProducts.map((product) => (
                 <article className="product-card" key={product.id}>
                   <div className="product-image-wrap">
-                    <img src={product.image_url} alt={product.name} />
+                    <img src={product.image_url || productPlaceholder} alt={product.name} />
                     <span className="stock-pill">{product.stock} left</span>
                   </div>
 
