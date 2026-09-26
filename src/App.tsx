@@ -7,7 +7,7 @@ import { productArt } from './productArt'
 import PrinterReceipt from './PrinterReceipt'
 import { useQrScanner } from './useQrScanner'
 import { money } from './types'
-import type { CartItem, Category, Order, OrderStatus, Product } from './types'
+import type { CartItem, Category, Order, Product } from './types'
 
 /* ============================================================
    Supabase client
@@ -301,8 +301,22 @@ function App() {
   /* Atomic order: the RPC decrements stock in the same transaction,
      so the site can never oversell — screen stock == DB stock. */
   const placeOrder = async () => {
-    if (!name.trim() || !phone.trim() || cart.length === 0) {
+    if (!name.trim() || name.trim().length > 80) {
+      showToast('Enter your name (max 80 characters).')
+      return
+    }
+    if (!/^\+?[\d\s-]{6,20}$/.test(phone.trim())) {
+      showToast('Enter a valid phone number (6–20 digits).')
+      return
+    }
+    if (cart.length === 0) {
       showToast('Add a product and enter your details before placing an order.')
+      return
+    }
+    // Final stock re-check against live data — protects against stale carts.
+    const stale = cart.find((item) => item.quantity > stockOf(item.productId))
+    if (stale) {
+      showToast(`Only ${stockOf(stale.productId)} left of ${stale.name} — adjust your cart.`)
       return
     }
     if (supabase && placing) return
@@ -337,6 +351,7 @@ function App() {
           created_at: new Date().toISOString(),
         }
         setReceipt(order)
+        setOrders((current) => [order, ...current])
       }
       setCart([])
       setName('')
@@ -351,20 +366,59 @@ function App() {
 
   /* ---------- admin actions ---------- */
 
-  const setOrderStatus = async (id: string, status: OrderStatus) => {
+  // Cancelling restocks automatically via the DB trigger.
+  // Validating is a two-step UI flow (confirm dialog) that DELETES the order
+  // — stock was already decremented atomically when the order was placed.
+  const cancelOrder = async (id: string) => {
     if (!supabase) {
-      setOrders((current) => current.map((o) => (o.id === id ? { ...o, status } : o)))
-      showToast('Demo mode: status changed locally only.')
+      setOrders((current) => current.filter((o) => o.id !== id))
+      showToast('Demo mode: order removed locally.')
       return
     }
-    const { error } = await supabase.from('orders').update({ status }).eq('id', id)
+    const { error } = await supabase.from('orders').update({ status: 'cancelled' }).eq('id', id)
     if (error) {
-      showToast(`Could not update order: ${error.message}`)
+      showToast(`Could not cancel: ${error.message}`)
       return
     }
-    // Cancelled orders restock automatically via DB trigger; refresh both.
+    await supabase.from('orders').delete().eq('id', id)
     await Promise.all([fetchOrders(), fetchProducts()])
-    showToast(status === 'cancelled' ? 'Order cancelled — stock restored.' : `Order ${status}.`)
+    showToast('Order cancelled — stock restored, order removed.')
+  }
+
+  const validateOrder = async (id: string) => {
+    const order = orders.find((o) => o.id === id)
+    if (!order) return
+
+    if (supabase) {
+      // Safety net: force stock to match the order (guards against any drift,
+      // e.g. stock was edited by hand between placement and pickup).
+      for (const item of order.items) {
+        const product = products.find((p) => p.id === item.productId)
+        if (product) {
+          const corrected = Math.max(0, product.stock - item.quantity)
+          await supabase
+            .from('products')
+            .update({ stock: corrected, available: corrected > 0 })
+            .eq('id', product.id)
+        }
+      }
+      const { error } = await supabase.from('orders').delete().eq('id', id)
+      if (error) {
+        showToast(`Could not validate: ${error.message}`)
+        return
+      }
+      await Promise.all([fetchOrders(), fetchProducts()])
+    } else {
+      setOrders((current) => current.filter((o) => o.id !== id))
+      setProducts((current) =>
+        current.map((p) => {
+          const item = order.items.find((i) => i.productId === p.id)
+          return item ? { ...p, stock: Math.max(0, p.stock - item.quantity), available: p.stock - item.quantity > 0 } : p
+        }),
+      )
+    }
+    setConfirmValidate(null)
+    showToast(`Order ${order.order_code} validated — picked up, stock updated. 🎉`)
   }
 
   const validateByCode = async (rawCode: string) => {
@@ -375,18 +429,21 @@ function App() {
       showToast(`No order found with code ${code}.`)
       return
     }
-    if (order.status === 'validated') {
-      showToast(`${code} is already validated ✓`)
-      return
-    }
     if (order.status === 'cancelled') {
       showToast(`${code} was cancelled — cannot validate.`)
       return
     }
-    await setOrderStatus(order.id, 'validated')
+    setConfirmValidate(order)
   }
 
+  const [confirmValidate, setConfirmValidate] = useState<Order | null>(null)
+  const [confirmCancel, setConfirmCancel] = useState<Order | null>(null)
+
   const updateStock = async (product: Product, stock: number) => {
+    if (!Number.isFinite(stock) || stock < 0) {
+      showToast('Stock must be a number of 0 or more.')
+      return
+    }
     if (!supabase) {
       setProducts((current) =>
         current.map((p) => (p.id === product.id ? { ...p, stock, available: stock > 0 } : p)),
@@ -417,24 +474,46 @@ function App() {
 
   const createProduct = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!newProduct.name.trim() || !Number(newProduct.price)) {
-      showToast('Product needs at least a name and a price.')
+    // Validation — the product must match the database structure exactly.
+    const name = newProduct.name.trim()
+    const price = Number(newProduct.price)
+    const stock = Math.floor(Number(newProduct.stock) || 0)
+    const description = newProduct.description.trim() || 'Imported specialty product.'
+    const imageUrl = newProduct.image_url.trim()
+
+    if (name.length < 2 || name.length > 80) {
+      showToast('Name must be between 2 and 80 characters.')
+      return
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      showToast('Price must be a positive number (in Ar).')
+      return
+    }
+    if (stock < 0) {
+      showToast('Stock cannot be negative.')
+      return
+    }
+    if (!productCategories.some((c) => c.key === newProduct.category)) {
+      showToast('Pick a valid category from the list.')
+      return
+    }
+    if (imageUrl && !/^https:\/\//.test(imageUrl)) {
+      showToast('Image URL must start with https://')
       return
     }
     if (!supabase) {
       showToast('Demo mode: connect Supabase to create products.')
       return
     }
-    const stock = Math.max(0, Number(newProduct.stock) || 0)
     const { error } = await supabase.from('products').insert([
       {
-        name: newProduct.name.trim(),
-        price: Number(newProduct.price),
+        name,
+        price,
         stock,
         available: stock > 0,
         category: newProduct.category,
-        description: newProduct.description.trim() || 'Imported specialty product.',
-        image_url: newProduct.image_url.trim() || null,
+        description: description.slice(0, 300),
+        image_url: imageUrl || null,
       },
     ])
     if (error) {
@@ -443,7 +522,7 @@ function App() {
     }
     setNewProduct({ name: '', price: '', stock: '', category: 'snacks', description: '', image_url: '' })
     await fetchProducts()
-    showToast('Product added to the store ✓')
+    showToast(`“${name}” is now live in the store ✓`)
   }
 
   /* ============================================================
@@ -451,7 +530,26 @@ function App() {
      ============================================================ */
 
   if (view === 'admin') {
-    return <AdminDashboard {...{ isAdmin, session, logoutAdmin, orders, products, setOrderStatus, validateByCode, updateStock, newProduct, setNewProduct, createProduct }} />
+    return (
+      <AdminDashboard
+        isAdmin={isAdmin}
+        session={session}
+        logoutAdmin={logoutAdmin}
+        orders={orders}
+        products={products}
+        onCancelOrder={cancelOrder}
+        onValidateOrder={validateOrder}
+        validateByCode={validateByCode}
+        updateStock={updateStock}
+        newProduct={newProduct}
+        setNewProduct={setNewProduct}
+        createProduct={createProduct}
+        confirmValidate={confirmValidate}
+        setConfirmValidate={setConfirmValidate}
+        confirmCancel={confirmCancel}
+        setConfirmCancel={setConfirmCancel}
+      />
+    )
   }
 
   /* ============================================================
@@ -676,7 +774,8 @@ function AdminDashboard(props: {
   logoutAdmin: () => void
   orders: Order[]
   products: Product[]
-  setOrderStatus: (id: string, status: OrderStatus) => void
+  onCancelOrder: (id: string) => void
+  onValidateOrder: (id: string) => void
   validateByCode: (code: string) => void
   updateStock: (product: Product, stock: number) => void
   newProduct: { name: string; price: string; stock: string; category: string; description: string; image_url: string }
@@ -684,6 +783,10 @@ function AdminDashboard(props: {
     React.SetStateAction<{ name: string; price: string; stock: string; category: string; description: string; image_url: string }>
   >
   createProduct: (event: React.FormEvent) => void
+  confirmValidate: Order | null
+  setConfirmValidate: (order: Order | null) => void
+  confirmCancel: Order | null
+  setConfirmCancel: (order: Order | null) => void
 }) {
   const {
     isAdmin,
@@ -691,12 +794,17 @@ function AdminDashboard(props: {
     logoutAdmin,
     orders,
     products,
-    setOrderStatus,
+    onCancelOrder,
+    onValidateOrder,
     validateByCode,
     updateStock,
     newProduct,
     setNewProduct,
     createProduct,
+    confirmValidate,
+    setConfirmValidate,
+    confirmCancel,
+    setConfirmCancel,
   } = props
 
   const [tab, setTab] = useState<AdminTab>('orders')
@@ -704,6 +812,16 @@ function AdminDashboard(props: {
   const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({})
 
   const pendingCount = orders.filter((o) => o.status === 'pending').length
+  const lowStockCount = products.filter((p) => p.stock > 0 && p.stock <= 3).length
+  const outOfStockCount = products.filter((p) => p.stock === 0).length
+  const potentialRevenue = orders.reduce((sum, o) => sum + Number(o.total ?? 0), 0)
+
+  const stats = [
+    { label: 'Orders to pick up', value: String(pendingCount), tone: pendingCount ? 'warn' : 'ok' },
+    { label: 'Potential revenue', value: money(potentialRevenue), tone: 'ok' },
+    { label: 'Low stock (≤3)', value: String(lowStockCount), tone: lowStockCount ? 'warn' : 'ok' },
+    { label: 'Sold out', value: String(outOfStockCount), tone: outOfStockCount ? 'bad' : 'ok' },
+  ]
 
   // QR scanner — only mounted while the scan tab is active
   const ScanTab = () => {
@@ -794,6 +912,15 @@ function AdminDashboard(props: {
           </div>
         )}
 
+        <div className="admin-stats">
+          {stats.map((stat) => (
+            <div className={`stat-card ${stat.tone}`} key={stat.label}>
+              <strong>{stat.value}</strong>
+              <span>{stat.label}</span>
+            </div>
+          ))}
+        </div>
+
         {tab === 'orders' && (
           <section className="admin-orders">
             <div className="section-header">
@@ -836,16 +963,14 @@ function AdminDashboard(props: {
                     <button
                       type="button"
                       className="primary-button"
-                      disabled={order.status !== 'pending'}
-                      onClick={() => setOrderStatus(order.id, 'validated')}
+                      onClick={() => setConfirmValidate(order)}
                     >
-                      Validate
+                      ✓ Validate pickup
                     </button>
                     <button
                       type="button"
-                      className="ghost-button"
-                      disabled={order.status !== 'pending'}
-                      onClick={() => setOrderStatus(order.id, 'cancelled')}
+                      className="ghost-button danger"
+                      onClick={() => setConfirmCancel(order)}
                     >
                       Cancel (restocks)
                     </button>
@@ -996,6 +1121,59 @@ function AdminDashboard(props: {
           </section>
         )}
       </main>
+
+      {/* ---- Confirm validation dialog ---- */}
+      {confirmValidate && (
+        <div className="modal-backdrop">
+          <div className="panel confirm-dialog">
+            <h2>Validate this order?</h2>
+            <p className="confirm-order-code">{confirmValidate.order_code}</p>
+            <ul className="order-items">
+              {confirmValidate.items.map((item) => (
+                <li key={item.productId}>
+                  {item.name} × {item.quantity} — {money(item.price * item.quantity)}
+                </li>
+              ))}
+            </ul>
+            <p className="confirm-total">
+              Total: <strong>{money(confirmValidate.total)}</strong>
+            </p>
+            <p className="confirm-note">
+              The customer has their receipt in hand. The order will be removed from the
+              dashboard and the stock will be updated. This cannot be undone.
+            </p>
+            <div className="confirm-actions">
+              <button type="button" className="primary-button" onClick={() => onValidateOrder(confirmValidate.id)}>
+                Yes, order validated
+              </button>
+              <button type="button" className="ghost-button" onClick={() => setConfirmValidate(null)}>
+                Go back
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Confirm cancel dialog ---- */}
+      {confirmCancel && (
+        <div className="modal-backdrop">
+          <div className="panel confirm-dialog">
+            <h2>Cancel this order?</h2>
+            <p className="confirm-order-code">{confirmCancel.order_code}</p>
+            <p className="confirm-note">
+              Every item goes back into stock and the order disappears from the dashboard.
+            </p>
+            <div className="confirm-actions">
+              <button type="button" className="ghost-button danger" onClick={() => onCancelOrder(confirmCancel.id)}>
+                Yes, cancel it
+              </button>
+              <button type="button" className="primary-button" onClick={() => setConfirmCancel(null)}>
+                Keep the order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )

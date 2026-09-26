@@ -1355,3 +1355,192 @@ button:disabled {
   width: 100%;
   border-radius: 14px;
 }
+
+/* ============================================================
+   ADMIN — DARK THEME (matches the shop), readable by design
+   ============================================================ */
+
+.admin-shell {
+  background:
+    radial-gradient(circle at top, rgba(203, 91, 64, 0.18), transparent 30%),
+    linear-gradient(180deg, #26151d 0%, #120d12 100%);
+  color: #f6efe9;
+}
+
+.admin-header {
+  background: rgba(16, 10, 14, 0.92);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f6efe9;
+}
+
+.admin-header small { color: rgba(246, 239, 233, 0.55); }
+
+.admin-identity { color: rgba(246, 239, 233, 0.75); }
+
+.admin-tab {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: none;
+  color: rgba(246, 239, 233, 0.85);
+}
+
+.admin-tab:hover { background: rgba(255, 255, 255, 0.1); }
+
+.admin-tab.active {
+  background: rgba(217, 92, 69, 0.18);
+  border-color: rgba(217, 92, 69, 0.5);
+  color: #ffd9c4;
+  box-shadow: 0 -3px 14px rgba(217, 92, 69, 0.15);
+}
+
+/* Stat cards */
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 16px 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.stat-card strong {
+  font-size: 1.5rem;
+  color: #ffd9c4;
+}
+
+.stat-card span {
+  font-size: 0.78rem;
+  color: rgba(246, 239, 233, 0.65);
+  letter-spacing: 0.02em;
+}
+
+.stat-card.warn strong { color: #f4d29a; }
+.stat-card.bad strong { color: #f09b9e; }
+
+/* Order cards */
+.order-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: 16px 18px;
+}
+
+.order-card-header strong { color: #ffd9c4; font-size: 1.02rem; }
+.order-card-header span { color: rgba(246, 239, 233, 0.7); }
+
+.order-items { color: rgba(246, 239, 233, 0.8); }
+
+.order-card-body p { color: rgba(246, 239, 233, 0.65); }
+.order-card-body strong { color: #f6efe9; }
+
+/* Stock table */
+.stock-table {
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.stock-table th {
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(246, 239, 233, 0.6);
+}
+
+.stock-table td { border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.stock-table tr.out { background: rgba(220, 60, 40, 0.1); }
+
+.stock-edit input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #f6efe9;
+}
+
+/* New product form */
+.new-product-form {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.new-product-form label { color: rgba(246, 239, 233, 0.85); }
+
+.new-product-form input,
+.new-product-form select,
+.new-product-form textarea {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #f6efe9;
+}
+
+.new-product-form input::placeholder,
+.new-product-form textarea::placeholder {
+  color: rgba(246, 239, 233, 0.35);
+}
+
+/* QR scan */
+.scan-video-wrap {
+  background: #0d080b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.scan-overlay { background: rgba(13, 8, 11, 0.72); }
+
+.scan-hint { color: rgba(246, 239, 233, 0.7); }
+
+.scan-side .manual-lookup input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #f6efe9;
+}
+
+/* Confirmation dialogs */
+.confirm-dialog {
+  max-width: 420px;
+  width: calc(100% - 32px);
+  background: #1d1318;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.confirm-dialog h2 { color: #ffd9c4; }
+
+.confirm-order-code {
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #f4d29a;
+  margin: 4px 0 10px;
+}
+
+.confirm-total { color: rgba(246, 239, 233, 0.85); }
+
+.confirm-note {
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: rgba(246, 239, 233, 0.6);
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.ghost-button.danger {
+  border-color: rgba(220, 80, 60, 0.5);
+  color: #f09b9e;
+}
+
+.ghost-button.danger:hover {
+  background: rgba(220, 80, 60, 0.12);
+}
+
+.empty-state { color: rgba(246, 239, 233, 0.55); }
+
+.section-header span { color: rgba(246, 239, 233, 0.55); }

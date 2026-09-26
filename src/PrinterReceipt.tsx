@@ -21,8 +21,10 @@ type Props = {
 export default function PrinterReceipt({ order, onClose }: Props) {
   const [printedLines, setPrintedLines] = useState(0)
   const [done, setDone] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [qrDataUrl, setQrDataUrl] = useState<string>('')
   const paperRef = useRef<HTMLDivElement>(null)
+  const paperInnerRef = useRef<HTMLDivElement>(null)
 
   const lines = useMemo<ReceiptLine[]>(
     () =>
@@ -76,23 +78,37 @@ export default function PrinterReceipt({ order, onClose }: Props) {
   }, [printedLines])
 
   const download = async () => {
-    // Rasterize the receipt box (html2canvas-free: draw with the DOM via SVG foreignObject)
-    const node = paperRef.current
-    if (!node) return
+    // Rasterize the full receipt paper (not the scroll-clipped wrapper)
+    const node = paperInnerRef.current
+    if (!node || downloading) return
+    setDownloading(true)
     try {
       const { default: htmlToImage } = await import('html-to-image')
-      const dataUrl = await htmlToImage.toPng(node, { pixelRatio: 2, backgroundColor: '#f8f1ea' })
+      const dataUrl = await htmlToImage.toPng(node, {
+        pixelRatio: 2,
+        backgroundColor: '#f8f1ea',
+        cacheBust: true,
+      })
       const link = document.createElement('a')
       link.download = `fuzzy-receipt-${order.order_code}.png`
       link.href = dataUrl
+      document.body.appendChild(link)
       link.click()
+      link.remove()
     } catch {
-      // Fallback: open a printable window
+      // Fallback: open a printable window with the receipt text
       const win = window.open('', '_blank')
       if (win) {
-        win.document.write(`<pre style="font-family:monospace;padding:24px">${node.innerText}</pre>`)
-        win.print()
+        win.document.write(
+          `<html><head><title>Fuzzy receipt ${order.order_code}</title></head>` +
+          `<body style="background:#f8f1ea"><pre style="font-family:'Courier New',monospace;font-size:13px;padding:24px;white-space:pre-wrap">${node.innerText.replace(/[<>&]/g, '')}</pre>` +
+          `${qrDataUrl ? `<img src="${qrDataUrl}" width="180" style="display:block;margin:0 auto"/>` : ''}</body></html>`,
+        )
+        win.document.close()
+        setTimeout(() => win.print(), 300)
       }
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -123,7 +139,7 @@ export default function PrinterReceipt({ order, onClose }: Props) {
         </div>
 
         <div className="paper-wrap" ref={paperRef}>
-          <div className="paper" id="receipt-paper">
+          <div className="paper" id="receipt-paper" ref={paperInnerRef}>
             {visible.map((line, i) => {
               switch (line.kind) {
                 case 'dashed':
@@ -161,8 +177,8 @@ export default function PrinterReceipt({ order, onClose }: Props) {
       </div>
 
       <div className="printer-actions">
-        <button type="button" className="primary-button" disabled={!done} onClick={download}>
-          {done ? '⬇ Download receipt' : 'Printing…'}
+        <button type="button" className="primary-button" disabled={!done || downloading} onClick={download}>
+          {downloading ? 'Preparing…' : done ? '⬇ Download receipt' : 'Printing…'}
         </button>
         <button type="button" className="ghost-button" onClick={onClose}>
           Continue shopping
