@@ -366,9 +366,9 @@ function App() {
 
   /* ---------- admin actions ---------- */
 
-  // Cancelling restocks automatically via the DB trigger.
-  // Validating is a two-step UI flow (confirm dialog) that DELETES the order
-  // — stock was already decremented atomically when the order was placed.
+  // Cancelling: set status (DB trigger restocks), then best-effort delete.
+  // The dashboard only shows pending orders, so a cancelled order vanishes
+  // from view the moment its status changes — even if the delete is blocked.
   const cancelOrder = async (id: string) => {
     if (!supabase) {
       setOrders((current) => current.filter((o) => o.id !== id))
@@ -380,6 +380,7 @@ function App() {
       showToast(`Could not cancel: ${error.message}`)
       return
     }
+    // Cleanup: remove from the table entirely (requires the admin delete policy).
     await supabase.from('orders').delete().eq('id', id)
     await Promise.all([fetchOrders(), fetchProducts()])
     showToast('Order cancelled — stock restored, order removed.')
@@ -390,8 +391,15 @@ function App() {
     if (!order) return
 
     if (supabase) {
-      // Safety net: force stock to match the order (guards against any drift,
-      // e.g. stock was edited by hand between placement and pickup).
+      // Step 1 — mark validated. This ALWAYS works for admins (RLS update policy)
+      // and instantly removes the order from the pending dashboard.
+      const { error: updErr } = await supabase.from('orders').update({ status: 'validated' }).eq('id', id)
+      if (updErr) {
+        showToast(`Could not validate: ${updErr.message}`)
+        return
+      }
+
+      // Step 2 — force stock to match what left the shelf (safety net).
       for (const item of order.items) {
         const product = products.find((p) => p.id === item.productId)
         if (product) {
@@ -402,12 +410,17 @@ function App() {
             .eq('id', product.id)
         }
       }
-      const { error } = await supabase.from('orders').delete().eq('id', id)
-      if (error) {
-        showToast(`Could not validate: ${error.message}`)
+
+      await Promise.all([fetchOrders(), fetchProducts()])
+
+      // Step 3 — cleanup: delete the row (needs the admin delete policy in SQL;
+      // harmless if blocked, the order is already out of the dashboard).
+      const { error: delErr } = await supabase.from('orders').delete().eq('id', id)
+      if (delErr) {
+        showToast(`Order validated ✓ — run the delete-policy SQL to also purge it from the table (${delErr.message}).`)
+        setConfirmValidate(null)
         return
       }
-      await Promise.all([fetchOrders(), fetchProducts()])
     } else {
       setOrders((current) => current.filter((o) => o.id !== id))
       setProducts((current) =>
@@ -811,10 +824,13 @@ function AdminDashboard(props: {
   const [manualCode, setManualCode] = useState('')
   const [stockDrafts, setStockDrafts] = useState<Record<string, string>>({})
 
-  const pendingCount = orders.filter((o) => o.status === 'pending').length
+  // Dashboard shows ONLY orders waiting for pickup — validated/cancelled
+  // ones disappear automatically the moment their status changes.
+  const pendingOrders = orders.filter((o) => o.status === 'pending')
+  const pendingCount = pendingOrders.length
   const lowStockCount = products.filter((p) => p.stock > 0 && p.stock <= 3).length
   const outOfStockCount = products.filter((p) => p.stock === 0).length
-  const potentialRevenue = orders.reduce((sum, o) => sum + Number(o.total ?? 0), 0)
+  const potentialRevenue = pendingOrders.reduce((sum, o) => sum + Number(o.total ?? 0), 0)
 
   const stats = [
     { label: 'Orders to pick up', value: String(pendingCount), tone: pendingCount ? 'warn' : 'ok' },
@@ -927,10 +943,10 @@ function AdminDashboard(props: {
               <h2>Orders</h2>
               <span>{orders.length} recent · live</span>
             </div>
-            {orders.length === 0 ? (
-              <p className="empty-state">No orders yet.</p>
+            {pendingOrders.length === 0 ? (
+              <p className="empty-state">No orders waiting — all caught up! 🎉</p>
             ) : (
-              orders.map((order) => (
+              pendingOrders.map((order) => (
                 <article className="order-card" key={order.id}>
                   <div className="order-card-header">
                     <div>
