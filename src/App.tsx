@@ -130,16 +130,23 @@ function App() {
     return () => sub.subscription.unsubscribe()
   }, [])
 
-  // Confirm admin flag once signed in
+  // Confirm admin flag once signed in.
+  // ensure_profile() self-heals: if the user was created before the profiles
+  // trigger existed (or the repair migration wasn't run), the row is created
+  // here on the spot instead of login failing forever.
   useEffect(() => {
     if (!supabase || !session) return
     ;(async () => {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('is_admin')
-        .eq('id', session.user.id)
-        .maybeSingle()
-      if (!error && data?.is_admin) setIsAdmin(true)
+      const { data: ensured, error: ensureError } = await supabase.rpc('ensure_profile')
+      if (ensureError || !ensured) {
+        setDbError(
+          `Could not load your profile: ${ensureError?.message ?? 'no row returned'}. ` +
+            'The login repair migration (202609260001_login_repair.sql) probably has not been run yet.',
+        )
+        return
+      }
+      const row = Array.isArray(ensured) ? ensured[0] : ensured
+      if (row.is_admin) setIsAdmin(true)
     })()
   }, [session])
 
@@ -153,22 +160,41 @@ function App() {
       showToast('Demo mode: dashboard opened without database connection.')
       return
     }
-    const { error } = await supabase.auth.signInWithPassword({
+    if (!credentials.email.trim() || !credentials.password) {
+      showToast('Enter your admin email and password.')
+      return
+    }
+    const { data: authData, error } = await supabase.auth.signInWithPassword({
       email: credentials.email.trim(),
       password: credentials.password,
     })
     if (error) {
-      showToast(`Login failed: ${error.message}`)
+      const msg =
+        error.message === 'Invalid login credentials'
+          ? 'Wrong email or password — or the user does not exist yet (create it in Supabase → Authentication → Users).'
+          : error.message === 'Email not confirmed'
+            ? 'This email is not confirmed. In Supabase → Authentication → Users, confirm the user (or recreate it with “Auto Confirm User” on).'
+            : `Login failed: ${error.message}`
+      showToast(msg)
       return
     }
-    const { data, error: profileError } = await supabase
-      .from('profiles')
-      .select('is_admin')
-      .eq('id', (await supabase.auth.getUser()).data.user?.id ?? '')
-      .maybeSingle()
-    if (profileError || !data?.is_admin) {
+    // Self-heal + read the admin flag
+    const { data: ensured, error: ensureError } = await supabase.rpc('ensure_profile')
+    const row = ensured && !Array.isArray(ensured) ? ensured : Array.isArray(ensured) ? ensured[0] : null
+    if (ensureError || !row) {
       await supabase.auth.signOut()
-      showToast('This account is not an admin.')
+      showToast(
+        `Could not load your profile (${ensureError?.message ?? 'missing'}). ` +
+          'Run the repair migration 202609260001_login_repair.sql in the Supabase SQL Editor.',
+      )
+      return
+    }
+    if (!row.is_admin) {
+      await supabase.auth.signOut()
+      showToast(
+        `Signed in as ${authData.user?.email ?? 'user'}, but this account is not an admin. ` +
+          'In the Supabase SQL Editor run: update public.profiles set is_admin = true where id = auth.uid(); while signed in — or ask me to flip it for your email.',
+      )
       return
     }
     setIsAdmin(true)
