@@ -1544,3 +1544,14 @@ button:disabled {
 .empty-state { color: rgba(246, 239, 233, 0.55); }
 
 .section-header span { color: rgba(246, 239, 233, 0.55); }
+
+.ghost-button.small {
+  padding: 6px 14px;
+  font-size: 0.8rem;
+}
+
+.section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

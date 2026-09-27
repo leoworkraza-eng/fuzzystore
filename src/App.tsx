@@ -434,6 +434,23 @@ function App() {
     showToast(`Order ${order.order_code} validated — picked up, stock updated. 🎉`)
   }
 
+  // Purge validated/cancelled orders that are stuck in the table
+  // (older rows from before the delete policy existed).
+  const purgeArchive = async () => {
+    if (!supabase) {
+      setOrders((current) => current.filter((o) => o.status === 'pending'))
+      showToast('Demo mode: archive cleared locally.')
+      return
+    }
+    const { error } = await supabase.from('orders').delete().in('status', ['validated', 'cancelled'])
+    if (error) {
+      showToast(`Database refused the purge (${error.message}) — run the delete-policy + cleanup SQL.`)
+      return
+    }
+    await fetchOrders()
+    showToast('Archive purged — database is clean. ✓')
+  }
+
   const validateByCode = async (rawCode: string) => {
     const code = rawCode.replace(/^FUZZY-ORDER:/i, '').trim().toUpperCase()
     if (!code) return
@@ -552,6 +569,7 @@ function App() {
         products={products}
         onCancelOrder={cancelOrder}
         onValidateOrder={validateOrder}
+        onPurgeArchive={purgeArchive}
         validateByCode={validateByCode}
         updateStock={updateStock}
         newProduct={newProduct}
@@ -789,6 +807,7 @@ function AdminDashboard(props: {
   products: Product[]
   onCancelOrder: (id: string) => void
   onValidateOrder: (id: string) => void
+  onPurgeArchive: () => void
   validateByCode: (code: string) => void
   updateStock: (product: Product, stock: number) => void
   newProduct: { name: string; price: string; stock: string; category: string; description: string; image_url: string }
@@ -809,6 +828,7 @@ function AdminDashboard(props: {
     products,
     onCancelOrder,
     onValidateOrder,
+    onPurgeArchive,
     validateByCode,
     updateStock,
     newProduct,
@@ -941,7 +961,14 @@ function AdminDashboard(props: {
           <section className="admin-orders">
             <div className="section-header">
               <h2>Orders</h2>
-              <span>{orders.length} recent · live</span>
+              <span className="section-header-actions">
+                {orders.length - pendingOrders.length > 0 && (
+                  <button type="button" className="ghost-button small" onClick={onPurgeArchive}>
+                    🧹 Purge {orders.length - pendingOrders.length} finished from DB
+                  </button>
+                )}
+                <span>{pendingOrders.length} waiting · live</span>
+              </span>
             </div>
             {pendingOrders.length === 0 ? (
               <p className="empty-state">No orders waiting — all caught up! 🎉</p>
