@@ -873,13 +873,17 @@ function AdminDashboard(props: {
             <video ref={scanner.videoRef} muted playsInline />
             {scanner.status !== 'scanning' && (
               <div className="scan-overlay">
-                {scanner.status === 'unsupported' && <p>This browser has no camera QR support. Use manual lookup →</p>}
-                {scanner.status === 'denied' && <p>Camera permission denied. Enable it in your browser settings.</p>}
+                {scanner.status === 'denied' && <p>Camera permission denied. Enable it in your browser settings, then tap Start again.</p>}
                 {scanner.status === 'error' && <p>Camera error: {scanner.lastError}</p>}
                 {(scanner.status === 'idle' || scanner.status === 'starting') && (
-                  <button type="button" className="primary-button" onClick={scanner.start}>
-                    {scanner.status === 'starting' ? 'Starting camera…' : 'Start camera'}
-                  </button>
+                  <>
+                    <p style={{ fontSize: 13, opacity: 0.85, maxWidth: 260 }}>
+                      Works in any browser — Safari, Chrome, Firefox, iPhone or Android.
+                    </p>
+                    <button type="button" className="primary-button" onClick={scanner.start}>
+                      {scanner.status === 'starting' ? 'Starting camera…' : 'Start camera'}
+                    </button>
+                  </>
                 )}
               </div>
             )}
